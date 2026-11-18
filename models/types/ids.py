@@ -62,3 +62,19 @@ class TraktIds(BaseModel):
                 return v
             raise ValueError(f"imdb must match ^tt\\d+$, got: {v!r}")
         raise ValueError(f"imdb must be a string, got: {type(v).__name__}")
+
+
+class TraktPersonIds(TraktIds):
+    """Trakt IDs for a person, whose IMDB IDs use the ``nm`` prefix."""
+
+    @field_validator("imdb", mode="before")
+    @classmethod
+    def validate_imdb_format(cls, v: object) -> str | None:
+        """Validate IMDB person ID format (nm + digits)."""
+        if v is None or v == "":
+            return None
+        if isinstance(v, str):
+            if re.match(r"^nm\d+$", v):
+                return v
+            raise ValueError(f"imdb must match ^nm\\d+$, got: {v!r}")
+        raise ValueError(f"imdb must be a string, got: {type(v).__name__}")

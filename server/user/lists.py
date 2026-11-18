@@ -1,9 +1,10 @@
 """MCP tools for managing the authenticated user's personal lists."""
 
-from typing import Annotated, Literal
+import re
+from typing import Annotated, ClassVar
 
 from mcp.server.fastmcp import FastMCP
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, StringConstraints, field_validator
 
 from client.pool import get_client
 from client.user.lists import UserListsClient
@@ -25,25 +26,28 @@ from config.mcp.descriptions import (
     USER_LIST_SORT_HOW_DESCRIPTION,
 )
 from models.formatters.user_lists import UserListFormatters
-from models.sync.watchlist import TraktSyncWatchlistItem, TraktSyncWatchlistRequest
-from models.types.ids import TraktIds
 from models.user.lists import (
+    LIST_COLLECTION_ITEM_TYPES,
     CreateUserList,
+    ListNameText,
     ListPrivacy,
     ListSortBy,
     ListSortHow,
     UpdateUserList,
-    UserListItemType,
+    UserListCollection,
+    UserListItemsRequest,
 )
-from server.base import LimitOnly, ToolErrors
-from server.sync.watchlist_inputs import (
-    UserWatchlistIdentifier,
-    UserWatchlistRequestItem,
+from server.base import (
+    CollectionItemIdentifier,
+    CollectionRequestItem,
+    LimitOnly,
+    ToolErrors,
+    unwrap_or_raise,
 )
 from utils.api.errors import handle_api_errors_func
 
 ListId = Annotated[str | int, Field(description=USER_LIST_ID_DESCRIPTION)]
-ListName = Annotated[str, Field(description=USER_LIST_NAME_DESCRIPTION, min_length=1)]
+ListName = Annotated[ListNameText, Field(description=USER_LIST_NAME_DESCRIPTION)]
 ListDescription = Annotated[
     str | None, Field(description=USER_LIST_DESCRIPTION_DESCRIPTION)
 ]
@@ -61,21 +65,41 @@ SortHow = Annotated[
     ListSortHow | None, Field(description=USER_LIST_SORT_HOW_DESCRIPTION)
 ]
 ItemType = Annotated[
-    Literal["movies", "shows", "seasons", "episodes"],
-    Field(description=USER_LIST_ITEM_TYPE_DESCRIPTION),
+    UserListCollection, Field(description=USER_LIST_ITEM_TYPE_DESCRIPTION)
 ]
+
+
+class UserListItemIdentifier(CollectionItemIdentifier):
+    """Identify a list item to remove; people take IMDB ``nm`` IDs."""
+
+    _identifier_error_prefix: ClassVar[str] = "List item"
+
+    @field_validator("imdb_id", mode="after")
+    @classmethod
+    def _validate_imdb_id_format(cls, v: str | None) -> str | None:
+        """Accept title IDs (tt) and person IDs (nm)."""
+        if v is not None and not re.match(r"^(tt|nm)\d+$", v):
+            raise ValueError(
+                "imdb_id must be 'tt' or 'nm' followed by digits"
+                + f" (e.g., 'tt0468569', 'nm0000206'), got: '{v}'"
+            )
+        return v
+
+
+class UserListRequestItem(UserListItemIdentifier, CollectionRequestItem):
+    """Identify a list item to add, with optional VIP notes."""
 
 
 class UserListIdentifier(BaseModel):
     """Validate a list identifier before constructing an endpoint."""
 
-    list_id: str = Field(min_length=1)
+    list_id: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1)]
 
 
 class UserListItemsParams(LimitOnly):
     """Validate list-content filters and standard limit/page combinations."""
 
-    item_type: UserListItemType | None = None
+    item_type: UserListCollection | None = None
 
 
 def _list_id(list_id: str | int) -> str:
@@ -83,30 +107,18 @@ def _list_id(list_id: str | int) -> str:
 
 
 def _result_or_raise[T](result: T | str, operation: str, list_id: str = "me") -> T:
-    if isinstance(result, str):
-        raise ToolErrors.handle_api_string_error(
-            resource_type="user_list",
-            resource_id=list_id,
-            error_message=result,
-            operation=operation,
-        )
-    return result
+    return unwrap_or_raise(
+        result, resource_type="user_list", resource_id=list_id, operation=operation
+    )
 
 
 def _items_request(
-    item_type: str,
-    items: list[UserWatchlistRequestItem] | list[UserWatchlistIdentifier],
-) -> TraktSyncWatchlistRequest:
-    sync_items = [
-        TraktSyncWatchlistItem(
-            ids=TraktIds.model_validate(item.build_ids_dict()),
-            title=item.title,
-            year=item.year,
-            notes=item.notes if isinstance(item, UserWatchlistRequestItem) else None,
-        )
-        for item in items
-    ]
-    return TraktSyncWatchlistRequest.model_validate({item_type: sync_items})
+    item_type: UserListCollection,
+    items: list[UserListRequestItem] | list[UserListItemIdentifier],
+) -> UserListItemsRequest:
+    return UserListItemsRequest.model_validate(
+        {item_type: [item.build_item_payload() for item in items]}
+    )
 
 
 @handle_api_errors_func
@@ -123,7 +135,7 @@ async def fetch_user_lists() -> str:
 async def fetch_user_list_items(
     list_id: ListId,
     item_type: Annotated[
-        UserListItemType | None,
+        UserListCollection | None,
         Field(description=USER_LIST_READ_ITEM_TYPE_DESCRIPTION),
     ] = None,
     limit: Annotated[int, Field(description=LIMIT_DESCRIPTION)] = DEFAULT_LIMIT,
@@ -131,14 +143,19 @@ async def fetch_user_list_items(
 ) -> str:
     """Read items of your own list, including private lists. Requires OAuth.
 
-    Filter by singular item type, or omit for all types. With page omitted,
+    Filter by one item type, or omit for all types. With page omitted,
     auto-paginates up to limit total items (0 uses the repository safety cap).
     With page specified, returns that page and navigation metadata.
     """
     identifier = _list_id(list_id)
     params = UserListItemsParams(item_type=item_type, limit=limit, page=page)
     result = await get_client(UserListsClient).get_user_list_items(
-        identifier, item_type=params.item_type, limit=params.limit, page=params.page
+        identifier,
+        item_type=LIST_COLLECTION_ITEM_TYPES[params.item_type]
+        if params.item_type
+        else None,
+        limit=params.limit,
+        page=params.page,
     )
     return UserListFormatters.format_list_items(
         _result_or_raise(result, "fetch_user_list_items", identifier), identifier
@@ -177,7 +194,7 @@ async def create_user_list(
 async def update_user_list(
     list_id: ListId,
     name: Annotated[
-        str | None, Field(description=USER_LIST_NAME_DESCRIPTION, min_length=1)
+        ListNameText | None, Field(description=USER_LIST_NAME_DESCRIPTION)
     ] = None,
     description: ListDescription = None,
     privacy: Privacy = None,
@@ -222,13 +239,13 @@ async def add_user_list_items(
     list_id: ListId,
     item_type: ItemType,
     items: Annotated[
-        list[UserWatchlistRequestItem],
+        list[UserListRequestItem],
         Field(description=USER_LIST_ITEMS_DESCRIPTION, min_length=1),
     ],
 ) -> str:
-    """Add movies, shows, seasons or episodes to your personal list.
+    """Add movies, shows, seasons, episodes or people to your personal list.
 
-    Uses watchlist-shaped items with optional VIP notes. Requires OAuth.
+    Supports optional VIP notes. Requires OAuth.
     """
     identifier = _list_id(list_id)
     request = _items_request(item_type, items)
@@ -242,13 +259,13 @@ async def remove_user_list_items(
     list_id: ListId,
     item_type: ItemType,
     items: Annotated[
-        list[UserWatchlistIdentifier],
+        list[UserListItemIdentifier],
         Field(description=USER_LIST_REMOVE_ITEMS_DESCRIPTION, min_length=1),
     ],
 ) -> str:
-    """Remove movies, shows, seasons or episodes from your personal list.
+    """Remove movies, shows, seasons, episodes or people from your personal list.
 
-    Uses watchlist-shaped identifiers. Requires OAuth.
+    Requires OAuth.
     """
     identifier = _list_id(list_id)
     request = _items_request(item_type, items)

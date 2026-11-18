@@ -300,20 +300,20 @@ USER_LIST_SORT_BY_DESCRIPTION: Final[str] = (
 )
 USER_LIST_SORT_HOW_DESCRIPTION: Final[str] = "List sort direction: asc or desc."
 USER_LIST_ITEMS_DESCRIPTION: Final[str] = (
-    "Items to add, using watchlist input shape. Each item needs trakt_id, slug, "
-    "imdb_id, tmdb_id, tvdb_id, or title and year. "
+    "Items to add. Each item needs trakt_id, slug, imdb_id, tmdb_id, tvdb_id, "
+    "or title and year; people need an identifier (IMDB IDs start with 'nm'). "
     'Example: [{"trakt_id": "314", "notes": "Watch soon"}]. '
     "Optional notes require VIP (500 characters maximum)."
 )
 USER_LIST_REMOVE_ITEMS_DESCRIPTION: Final[str] = (
-    "Items to remove, using watchlist input shape. Each item needs trakt_id, slug, "
-    "imdb_id, tmdb_id, tvdb_id, or title and year. "
+    "Items to remove. Each item needs trakt_id, slug, imdb_id, tmdb_id, tvdb_id, "
+    "or title and year; people need an identifier (IMDB IDs start with 'nm'). "
     'Example: [{"trakt_id": "314"}].'
 )
 USER_LIST_ITEM_TYPE_DESCRIPTION: Final[str] = (
-    "Content type for all supplied items: movies, shows, seasons, or episodes."
+    "Content type for all supplied items: movies, shows, seasons, episodes, or people."
 )
 USER_LIST_READ_ITEM_TYPE_DESCRIPTION: Final[str] = (
-    "Optional singular item type: movie, show, season, episode, or person. "
+    "Optional item type: movies, shows, seasons, episodes, or people. "
     "Omit to read all types, including items of your private lists."
 )

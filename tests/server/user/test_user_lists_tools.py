@@ -9,14 +9,11 @@ from mcp.server.fastmcp.exceptions import ToolError
 from pydantic import ValidationError
 
 from config.mcp.tools.user import USER_TOOLS
-from models.sync.watchlist import SyncWatchlistSummary
 from models.types.pagination import PaginatedResponse, PaginationMetadata
-from models.user.lists import UserList, UserListIds, UserListItem
-from server.sync.watchlist_inputs import (
-    UserWatchlistIdentifier,
-    UserWatchlistRequestItem,
-)
+from models.user.lists import UserList, UserListIds, UserListItem, UserListItemsSummary
 from server.user.lists import (
+    UserListItemIdentifier,
+    UserListRequestItem,
     add_user_list_items,
     create_user_list,
     delete_user_list,
@@ -42,7 +39,7 @@ async def test_fetch_lists_metadata_and_empty() -> None:
         client = factory.return_value
         client.get_user_lists = AsyncMock(return_value=[USER_LIST])
         result = await fetch_user_lists()
-        for text in ("Weekend", "42", "weekend", "private", "2", "Watch next"):
+        for text in ("Weekend", "42", "weekend", "private", "- Items: 2", "Watch next"):
             assert text in result
         client.get_user_lists.return_value = []
         assert "no personal lists" in await fetch_user_lists()
@@ -112,10 +109,12 @@ async def test_delete_list() -> None:
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("item_type", ["movies", "shows", "seasons", "episodes"])
+@pytest.mark.parametrize(
+    "item_type", ["movies", "shows", "seasons", "episodes", "people"]
+)
 @pytest.mark.parametrize("remove", [False, True])
 async def test_list_item_payload_and_summary(item_type: str, remove: bool) -> None:
-    summary = SyncWatchlistSummary.model_validate(
+    summary = UserListItemsSummary.model_validate(
         {
             "added": {item_type: 1},
             "existing": {item_type: 2},
@@ -123,6 +122,7 @@ async def test_list_item_payload_and_summary(item_type: str, remove: bool) -> No
             "not_found": {item_type: [{"ids": {"trakt": 99}}]},
         }
     )
+    imdb_id = "nm0000206" if item_type == "people" else "tt0133093"
     with patch("server.user.lists.UserListsClient") as factory:
         client = factory.return_value
         client.add_user_list_items = AsyncMock(return_value=summary)
@@ -131,14 +131,14 @@ async def test_list_item_payload_and_summary(item_type: str, remove: bool) -> No
             result = await remove_user_list_items(
                 "weekend",
                 item_type,  # pyright: ignore[reportArgumentType]
-                [UserWatchlistIdentifier(imdb_id="tt0133093")],
+                [UserListItemIdentifier(imdb_id=imdb_id)],
             )
             mock = client.remove_user_list_items
         else:
             result = await add_user_list_items(
                 "weekend",
                 item_type,  # pyright: ignore[reportArgumentType]
-                [UserWatchlistRequestItem(imdb_id="tt0133093", notes=" Watch soon ")],
+                [UserListRequestItem(imdb_id=imdb_id, notes=" Watch soon ")],
             )
             mock = client.add_user_list_items
             assert "Already in List (2)" in result
@@ -148,10 +148,15 @@ async def test_list_item_payload_and_summary(item_type: str, remove: bool) -> No
         assert "Items Not Found (1)" in result
         assert "trakt: 99" in result
         payload = mock.call_args.args[1].model_dump(exclude_none=True)
-        expected: dict[str, object] = {"ids": {"imdb": "tt0133093"}}
+        expected: dict[str, object] = {"ids": {"imdb": imdb_id}}
         if not remove:
             expected["notes"] = "Watch soon"
         assert payload == {item_type: [expected]}
+
+
+def test_list_item_errors_name_the_list() -> None:
+    with pytest.raises(ValidationError, match="List item must include"):
+        UserListItemIdentifier()
 
 
 @pytest.mark.asyncio
@@ -168,11 +173,11 @@ async def test_list_item_payload_and_summary(item_type: str, remove: bool) -> No
 async def test_identifiers(field: str, value: str, expected: dict[str, object]) -> None:
     with patch("server.user.lists.UserListsClient") as factory:
         client = factory.return_value
-        client.add_user_list_items = AsyncMock(return_value=SyncWatchlistSummary())
+        client.add_user_list_items = AsyncMock(return_value=UserListItemsSummary())
         await add_user_list_items(
             "weekend",
             "movies",
-            [UserWatchlistRequestItem.model_validate({field: value})],
+            [UserListRequestItem.model_validate({field: value})],
         )
         payload = client.add_user_list_items.call_args.args[1].model_dump(
             exclude_none=True
@@ -184,11 +189,11 @@ async def test_identifiers(field: str, value: str, expected: dict[str, object]) 
 async def test_title_and_year_identification() -> None:
     with patch("server.user.lists.UserListsClient") as factory:
         client = factory.return_value
-        client.remove_user_list_items = AsyncMock(return_value=SyncWatchlistSummary())
+        client.remove_user_list_items = AsyncMock(return_value=UserListItemsSummary())
         await remove_user_list_items(
             "weekend",
             "movies",
-            [UserWatchlistIdentifier(title="The Matrix", year=1999)],
+            [UserListItemIdentifier(title="The Matrix", year=1999)],
         )
         payload = client.remove_user_list_items.call_args.args[1].model_dump(
             exclude_none=True
@@ -216,25 +221,20 @@ async def test_api_error_strings_are_not_formatted(operation: str) -> None:
             "get_user_list_items",
         ):
             setattr(client, name, AsyncMock(return_value="API error: list not found"))
-        match operation:
-            case "fetch":
-                result = await fetch_user_lists()
-            case "read":
-                result = await fetch_user_list_items("weekend")
-            case "create":
-                result = await create_user_list("Weekend")
-            case "update":
-                result = await update_user_list("weekend", name="Updated")
-            case "delete":
-                result = await delete_user_list("weekend")
-            case "add":
-                result = await add_user_list_items(
-                    "weekend", "movies", [UserWatchlistRequestItem(trakt_id="314")]
-                )
-            case _:
-                result = await remove_user_list_items(
-                    "weekend", "movies", [UserWatchlistIdentifier(trakt_id="314")]
-                )
+        operations = {
+            "fetch": fetch_user_lists,
+            "read": lambda: fetch_user_list_items("weekend"),
+            "create": lambda: create_user_list("Weekend"),
+            "update": lambda: update_user_list("weekend", name="Updated"),
+            "delete": lambda: delete_user_list("weekend"),
+            "add": lambda: add_user_list_items(
+                "weekend", "movies", [UserListRequestItem(trakt_id="314")]
+            ),
+            "remove": lambda: remove_user_list_items(
+                "weekend", "movies", [UserListItemIdentifier(trakt_id="314")]
+            ),
+        }
+        result = await operations[operation]()
         assert result == "# Error\n\nError accessing user_list"
         formatters.format_lists.assert_not_called()
         formatters.format_items.assert_not_called()
@@ -262,14 +262,33 @@ async def test_registration_and_parameter_descriptions() -> None:
     ("tool", "arguments"),
     [
         ("create_user_list", {"name": ""}),
+        ("create_user_list", {"name": "   "}),
         ("create_user_list", {"name": "Test", "privacy": "unknown"}),
         ("create_user_list", {"name": "Test", "sort_by": "unknown"}),
         ("update_user_list", {"list_id": "weekend", "sort_how": "down"}),
         ("update_user_list", {"list_id": "weekend"}),
+        ("update_user_list", {"list_id": "weekend", "name": "   "}),
         ("delete_user_list", {"list_id": ""}),
+        ("delete_user_list", {"list_id": "   "}),
         (
             "add_user_list_items",
-            {"list_id": "weekend", "item_type": "people", "items": [{"trakt_id": "1"}]},
+            {"list_id": "weekend", "item_type": "person", "items": [{"trakt_id": "1"}]},
+        ),
+        (
+            "add_user_list_items",
+            {
+                "list_id": "weekend",
+                "item_type": "people",
+                "items": [{"title": "Keanu Reeves", "year": 1964}],
+            },
+        ),
+        (
+            "add_user_list_items",
+            {
+                "list_id": "weekend",
+                "item_type": "movies",
+                "items": [{"imdb_id": "nm0000206"}],
+            },
         ),
         (
             "add_user_list_items",
@@ -337,7 +356,7 @@ async def test_fetch_personal_list_items(page: int | None) -> None:
     with patch("server.user.lists.UserListsClient") as factory:
         client = factory.return_value
         client.get_user_list_items = AsyncMock(return_value=response)
-        result = await fetch_user_list_items(42, item_type="movie", limit=2, page=page)
+        result = await fetch_user_list_items(42, item_type="movies", limit=2, page=page)
         client.get_user_list_items.assert_awaited_once_with(
             "42", item_type="movie", limit=2, page=page
         )
@@ -365,7 +384,8 @@ async def test_fetch_personal_list_items_empty() -> None:
     "arguments",
     [
         {"list_id": ""},
-        {"list_id": "weekend", "item_type": "movies"},
+        {"list_id": "   "},
+        {"list_id": "weekend", "item_type": "movie"},
         {"list_id": "weekend", "limit": -1},
         {"list_id": "weekend", "limit": 101},
         {"list_id": "weekend", "page": 0},

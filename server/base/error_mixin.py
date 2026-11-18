@@ -403,3 +403,26 @@ class ToolErrors:
                 k: sanitize_value(v, k) for k, v in params.items() if v is not None
             },
         )
+
+
+def unwrap_or_raise[T](
+    result: T | str,
+    *,
+    resource_type: str,
+    resource_id: str,
+    operation: str,
+) -> T:
+    """Return ``result`` as ``T``, or raise a structured error if it is a string.
+
+    Trakt API clients still surface some failures as error strings instead of
+    raising. This helper folds the recurring guard-and-raise shape into a
+    single call, preserving pyright narrowing on the success path.
+    """
+    if isinstance(result, str):
+        raise ToolErrors.handle_api_string_error(
+            resource_type=resource_type,
+            resource_id=resource_id,
+            error_message=result,
+            operation=operation,
+        )
+    return result

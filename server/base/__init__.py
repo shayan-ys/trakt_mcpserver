@@ -1,6 +1,7 @@
 """Base classes and mixins for MCP server components."""
 
-from .error_mixin import ToolErrors
+from .collection_inputs import CollectionItemIdentifier, CollectionRequestItem
+from .error_mixin import ToolErrors, unwrap_or_raise
 from .identifier_mixin import IdentifierValidatorMixin
 from .limit_page_mixin import LimitPageValidatorMixin
 from .params import (
@@ -15,6 +16,8 @@ from .params import (
 )
 
 __all__ = [
+    "CollectionItemIdentifier",
+    "CollectionRequestItem",
     "CommentIdParam",
     "EpisodeIdParam",
     "IdentifierValidatorMixin",
@@ -26,4 +29,5 @@ __all__ = [
     "SeasonIdParam",
     "ShowIdParam",
     "ToolErrors",
+    "unwrap_or_raise",
 ]

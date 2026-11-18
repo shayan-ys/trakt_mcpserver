@@ -3,13 +3,14 @@
 from client.auth import AuthClient
 from client.endpoints import build_endpoint
 from config.api import DEFAULT_LIMIT
-from models.sync.watchlist import SyncWatchlistSummary, TraktSyncWatchlistRequest
 from models.types.pagination import PaginatedResponse
 from models.user.lists import (
     CreateUserList,
     UpdateUserList,
     UserList,
     UserListItem,
+    UserListItemsRequest,
+    UserListItemsSummary,
     UserListItemType,
 )
 from utils.api.error_types import AuthenticationRequiredError
@@ -83,24 +84,24 @@ class UserListsClient(AuthClient):
 
     @handle_api_errors
     async def add_user_list_items(
-        self, list_id: str, request: TraktSyncWatchlistRequest
-    ) -> SyncWatchlistSummary:
+        self, list_id: str, request: UserListItemsRequest
+    ) -> UserListItemsSummary:
         """Add items, including optional VIP notes (201 Created)."""
         await self._require_list_auth()
         return await self._post_typed_request(
             build_endpoint("user_list_items", id="me", list_id=list_id),
             request.model_dump(mode="json", exclude_none=True),
-            response_type=SyncWatchlistSummary,
+            response_type=UserListItemsSummary,
         )
 
     @handle_api_errors
     async def remove_user_list_items(
-        self, list_id: str, request: TraktSyncWatchlistRequest
-    ) -> SyncWatchlistSummary:
+        self, list_id: str, request: UserListItemsRequest
+    ) -> UserListItemsSummary:
         """Remove items (200 OK), preserving deleted and not-found counts."""
         await self._require_list_auth()
         return await self._post_typed_request(
             build_endpoint("user_list_items_remove", id="me", list_id=list_id),
             request.model_dump(mode="json", exclude_none=True),
-            response_type=SyncWatchlistSummary,
+            response_type=UserListItemsSummary,
         )

@@ -46,43 +46,21 @@ from models.sync.ratings import (
     TraktSyncRatingsRequest,
 )
 from models.sync.watchlist import (
-    TraktSyncWatchlistItem,
     TraktSyncWatchlistRequest,
 )
 from models.types.ids import TraktIds
 from models.types.pagination import PaginationParams
 from models.types.timestamps import WatchedAtValue
-from server.base import IdentifierValidatorMixin, ToolErrors
-from server.sync.watchlist_inputs import (
-    UserWatchlistIdentifier,
-    UserWatchlistRequestItem,
+from server.base import (
+    CollectionItemIdentifier,
+    CollectionRequestItem,
+    IdentifierValidatorMixin,
+    ToolErrors,
+    unwrap_or_raise,
 )
 from utils.api.errors import InvalidParamsError, MCPError, handle_api_errors_func
 
 logger = logging.getLogger("trakt_mcp")
-
-
-def _unwrap_or_raise[T](
-    result: T | str,
-    *,
-    resource_type: str,
-    resource_id: str,
-    operation: str,
-) -> T:
-    """Return ``result`` as ``T``, or raise a structured error if it is a string.
-
-    Trakt API clients still surface some failures as error strings instead of
-    raising. This helper folds the recurring guard-and-raise shape into a
-    single call, preserving pyright narrowing on the success path.
-    """
-    if isinstance(result, str):
-        raise ToolErrors.handle_api_string_error(
-            resource_type=resource_type,
-            resource_id=resource_id,
-            error_message=result,
-            operation=operation,
-        )
-    return result
 
 
 def _aggregate_summary(
@@ -350,6 +328,18 @@ class UserWatchlistParams(BaseModel):
         return v
 
 
+class UserWatchlistRequestItem(CollectionRequestItem):
+    """Single watchlist item for add operations (with optional notes)."""
+
+    _identifier_error_prefix: ClassVar[str] = "Watchlist item"
+
+
+class UserWatchlistIdentifier(CollectionItemIdentifier):
+    """Watchlist item identifier for removal operations (no notes)."""
+
+    _identifier_error_prefix: ClassVar[str] = "Watchlist item"
+
+
 class UserWatchlistRequest(BaseModel):
     """Parameters for adding/removing user watchlist items."""
 
@@ -397,7 +387,7 @@ async def fetch_user_ratings(
             rating_type, rating, pagination=pagination_params
         )
 
-        paginated_result = _unwrap_or_raise(
+        paginated_result = unwrap_or_raise(
             paginated_result,
             resource_type=f"user_{rating_type}_ratings",
             resource_id=f"user_ratings_{rating_type}",
@@ -456,7 +446,7 @@ async def add_user_ratings(
 
         summary = await client.add_sync_ratings(request)
 
-        summary = _unwrap_or_raise(
+        summary = unwrap_or_raise(
             summary,
             resource_type=f"add_user_{rating_type}_ratings",
             resource_id=f"add_ratings_{rating_type}",
@@ -513,7 +503,7 @@ async def remove_user_ratings(
 
         summary = await client.remove_sync_ratings(request)
 
-        summary = _unwrap_or_raise(
+        summary = unwrap_or_raise(
             summary,
             resource_type=f"remove_user_{rating_type}_ratings",
             resource_id=f"remove_ratings_{rating_type}",
@@ -575,7 +565,7 @@ async def fetch_user_watchlist(
             watchlist_type, sort_by, sort_how, pagination=pagination_params
         )
 
-        paginated_result = _unwrap_or_raise(
+        paginated_result = unwrap_or_raise(
             paginated_result,
             resource_type=f"user_{watchlist_type}_watchlist",
             resource_id=f"user_watchlist_{watchlist_type}",
@@ -612,30 +602,13 @@ async def add_user_watchlist(
     try:
         client = get_client(SyncClient)
 
-        # Convert to sync request format
-        sync_items: list[TraktSyncWatchlistItem] = []
-        for item in items:
-            # Create sync watchlist item
-            sync_item_data: dict[str, Any] = {"ids": item.build_ids_dict()}
-
-            # Add title and year if provided
-            if item.title:
-                sync_item_data["title"] = item.title
-            if item.year:
-                sync_item_data["year"] = item.year
-            # Add notes if provided (VIP only)
-            if item.notes:
-                sync_item_data["notes"] = item.notes
-
-            sync_items.append(TraktSyncWatchlistItem(**sync_item_data))
-
-        # Create request with the appropriate type
-        request_data: dict[str, Any] = {watchlist_type: sync_items}
-        request = TraktSyncWatchlistRequest(**request_data)
+        request = TraktSyncWatchlistRequest.model_validate(
+            {watchlist_type: [item.build_item_payload() for item in items]}
+        )
 
         summary = await client.add_sync_watchlist(request)
 
-        summary = _unwrap_or_raise(
+        summary = unwrap_or_raise(
             summary,
             resource_type=f"add_user_{watchlist_type}_watchlist",
             resource_id=f"add_watchlist_{watchlist_type}",
@@ -672,27 +645,13 @@ async def remove_user_watchlist(
     try:
         client = get_client(SyncClient)
 
-        # Convert to sync request format (no notes for removal)
-        sync_items: list[TraktSyncWatchlistItem] = []
-        for item in items:
-            # Create sync watchlist item (no notes for removal)
-            sync_item_data: dict[str, Any] = {"ids": item.build_ids_dict()}
-
-            # Add title and year if provided
-            if item.title:
-                sync_item_data["title"] = item.title
-            if item.year:
-                sync_item_data["year"] = item.year
-
-            sync_items.append(TraktSyncWatchlistItem(**sync_item_data))
-
-        # Create request with the appropriate type
-        request_data: dict[str, Any] = {watchlist_type: sync_items}
-        request = TraktSyncWatchlistRequest(**request_data)
+        request = TraktSyncWatchlistRequest.model_validate(
+            {watchlist_type: [item.build_item_payload() for item in items]}
+        )
 
         summary = await client.remove_sync_watchlist(request)
 
-        summary = _unwrap_or_raise(
+        summary = unwrap_or_raise(
             summary,
             resource_type=f"remove_user_{watchlist_type}_watchlist",
             resource_id=f"remove_watchlist_{watchlist_type}",
@@ -808,7 +767,7 @@ async def fetch_history(
         pagination=pagination_params,
     )
 
-    result = _unwrap_or_raise(
+    result = unwrap_or_raise(
         result,
         resource_type="history",
         resource_id=params.item_id or "all",
@@ -866,7 +825,7 @@ async def add_to_history(
         request = TraktHistoryRequest(**{history_type: history_items})
         summary = await client.add_to_history(request)
 
-    summary = _unwrap_or_raise(
+    summary = unwrap_or_raise(
         summary,
         resource_type=f"add_history_{history_type}",
         resource_id=f"add_history_{history_type}",
@@ -917,7 +876,7 @@ async def remove_from_history(
         request = TraktHistoryRequest(**{history_type: history_items})
         summary = await client.remove_from_history(request)
 
-    summary = _unwrap_or_raise(
+    summary = unwrap_or_raise(
         summary,
         resource_type=f"remove_history_{history_type}",
         resource_id=f"remove_history_{history_type}",

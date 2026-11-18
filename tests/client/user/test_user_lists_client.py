@@ -1,7 +1,7 @@
 """Mock-HTTP coverage for authenticated personal-list operations."""
 
 import json
-from collections.abc import Awaitable
+from collections.abc import Awaitable, Callable
 from typing import Final
 from unittest.mock import AsyncMock, patch
 
@@ -10,13 +10,14 @@ import pytest
 
 from client.user.lists import UserListsClient
 from models.auth import TraktAuthToken
-from models.sync.watchlist import SyncWatchlistSummary, TraktSyncWatchlistRequest
 from models.types.pagination import PaginatedResponse
 from models.user.lists import (
     CreateUserList,
     UpdateUserList,
     UserList,
     UserListItem,
+    UserListItemsRequest,
+    UserListItemsSummary,
     UserListItemType,
 )
 from utils.api.error_types import (
@@ -33,37 +34,33 @@ LIST_DATA: Final[dict[str, object]] = {
     "ids": {"trakt": 42, "slug": "weekend"},
 }
 SUMMARY_DATA: Final[dict[str, object]] = {
-    "added": {"movies": 1},
+    "added": {"movies": 1, "people": 1},
     "existing": {"movies": 1},
     "deleted": {"movies": 1},
-    "not_found": {"movies": [{"ids": {"trakt": 99}}]},
+    "not_found": {
+        "movies": [{"ids": {"trakt": 99}}],
+        "people": [{"ids": {"imdb": "nm0000206"}}],
+    },
     "list": {"updated_at": "2026-01-01T00:00:00.000Z", "item_count": 2},
 }
 
 
 def _operation(client: UserListsClient, operation: str) -> Awaitable[object]:
-    request = TraktSyncWatchlistRequest.model_validate(
+    request = UserListItemsRequest.model_validate(
         {"movies": [{"ids": {"trakt": 314}, "notes": "Watch soon"}]}
     )
-    match operation:
-        case "fetch":
-            return client.get_user_lists()
-        case "create":
-            return client.create_user_list(CreateUserList(name="Weekend"))
-        case "update":
-            return client.update_user_list(
-                "weekend", UpdateUserList(allow_comments=False)
-            )
-        case "delete":
-            return client.delete_user_list("weekend")
-        case "add":
-            return client.add_user_list_items("weekend", request)
-        case "remove":
-            return client.remove_user_list_items("weekend", request)
-        case "read":
-            return client.get_user_list_items("weekend")
-        case _:
-            raise AssertionError(operation)
+    operations: dict[str, Callable[[], Awaitable[object]]] = {
+        "fetch": client.get_user_lists,
+        "create": lambda: client.create_user_list(CreateUserList(name="Weekend")),
+        "update": lambda: client.update_user_list(
+            "weekend", UpdateUserList(allow_comments=False)
+        ),
+        "delete": lambda: client.delete_user_list("weekend"),
+        "add": lambda: client.add_user_list_items("weekend", request),
+        "remove": lambda: client.remove_user_list_items("weekend", request),
+        "read": lambda: client.get_user_list_items("weekend"),
+    }
+    return operations[operation]()
 
 
 @pytest.mark.asyncio
@@ -122,9 +119,12 @@ async def test_list_http_contract(
         assert json.loads(requests[0].content) == {
             "movies": [{"ids": {"trakt": 314}, "notes": "Watch soon"}]
         }
-        assert isinstance(result, SyncWatchlistSummary)
+        assert isinstance(result, UserListItemsSummary)
         assert result.not_found.movies[0].ids is not None
         assert result.not_found.movies[0].ids.trakt == 99
+        assert result.not_found.people[0].ids.imdb == "nm0000206"
+        assert result.added is not None
+        assert result.added.people == 1
     elif operation == "fetch":
         assert isinstance(result, list)
         assert result == [UserList.model_validate(LIST_DATA)]
@@ -228,7 +228,9 @@ async def test_read_list_items_authenticated_http(
     content: dict[str, object] = {"ids": {"trakt": 314}}
     match content_type:
         case "person":
-            content["name"] = "Keanu Reeves"
+            content.update(
+                {"name": "Keanu Reeves", "ids": {"trakt": 314, "imdb": "nm0000206"}}
+            )
         case "season":
             content["number"] = 1
         case "episode":

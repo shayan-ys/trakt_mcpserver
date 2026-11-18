@@ -530,8 +530,8 @@ fetch_user_lists()
 # Read items of your own list, including private lists (0=all, capped at 100)
 fetch_user_list_items(list_id="weekend-picks", limit=0)
 
-# Filter by singular type and request one page with navigation metadata
-fetch_user_list_items(list_id="weekend-picks", item_type="movie", limit=10, page=1)
+# Filter by type and request one page with navigation metadata
+fetch_user_list_items(list_id="weekend-picks", item_type="movies", limit=10, page=1)
 
 # Create a personal list (only name is required; private by default)
 create_user_list(name="Weekend picks", description="Watch next", privacy="private")
@@ -543,9 +543,9 @@ update_user_list(list_id="weekend-picks", name="Weekend movies", sort_by="title"
 add_user_list_items(list_id="weekend-picks", item_type="movies",
                     items=[{"trakt_id": "314", "notes": "Must watch!"}])
 
-# Remove list items (movies, shows, seasons, or episodes)
-remove_user_list_items(list_id="weekend-picks", item_type="movies",
-                       items=[{"trakt_id": "314"}])
+# Remove list items (movies, shows, seasons, episodes, or people)
+remove_user_list_items(list_id="weekend-picks", item_type="people",
+                       items=[{"imdb_id": "nm0000206"}])
 
 # Permanently delete a list and all its items
 delete_user_list(list_id="weekend-picks")

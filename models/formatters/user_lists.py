@@ -1,10 +1,19 @@
 """Markdown formatting for personal list metadata, contents and summaries."""
 
-from models.formatters.sync_watchlist import SyncWatchlistFormatters
+from typing import TYPE_CHECKING
+
 from models.formatters.utils import format_pagination_header, format_title_year
-from models.sync.watchlist import SyncWatchlistSummary
 from models.types.pagination import PaginatedResponse
-from models.user.lists import UserList, UserListItem
+from models.user.lists import (
+    UserList,
+    UserListCollection,
+    UserListItem,
+    UserListItemsSummary,
+)
+
+if TYPE_CHECKING:
+    from models.sync.watchlist import TraktSyncWatchlistItem
+    from models.user.lists import UserListPersonRequestItem
 
 
 class UserListFormatters:
@@ -32,13 +41,42 @@ class UserListFormatters:
 
     @staticmethod
     def format_items(
-        summary: SyncWatchlistSummary, operation: str, item_type: str, list_id: str
+        summary: UserListItemsSummary,
+        operation: str,
+        item_type: UserListCollection,
+        list_id: str,
     ) -> str:
-        """Use the shared collection summary, retaining not-found identifiers."""
-        formatted = SyncWatchlistFormatters.format_user_watchlist_summary(
-            summary, operation, item_type, collection_label="List"
+        """Report changed, existing and not-found items for one list mutation."""
+        lines = [f"# List {operation.title()} - {item_type.title()}", ""]
+        lines.append(f"List: {list_id}")
+        lines.append("")
+        counts = summary.added if operation == "added" else summary.deleted
+        total = getattr(counts, item_type) if counts else 0
+        if total:
+            lines.append(
+                f"✅ Successfully {operation} **{total}** {item_type} item(s)"
+                + f" {'to' if operation == 'added' else 'from'} your list."
+            )
+        else:
+            lines.append(f"No {item_type} items were {operation}.")
+        lines.append("")
+        existing = getattr(summary.existing, item_type) if summary.existing else 0
+        if operation == "added" and existing:
+            lines.append(f"## Items Already in List ({existing})")
+            lines.append("")
+        not_found: list[TraktSyncWatchlistItem] | list[UserListPersonRequestItem] = (
+            getattr(summary.not_found, item_type)
         )
-        return f"List: {list_id}\n\n{formatted}"
+        if not_found:
+            lines.append(f"## Items Not Found ({len(not_found)})")
+            lines.append("")
+            for item in not_found:
+                ids: dict[str, object] = (
+                    item.ids.model_dump(exclude_none=True) if item.ids else {}
+                )
+                label = ", ".join(f"{key}: {value}" for key, value in ids.items())
+                lines.append(f"- {label or 'Unknown item'}")
+        return "\n".join(lines)
 
     @staticmethod
     def format_list_items(
